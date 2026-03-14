@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user-specific settings and profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "TankState": {
+      "title": "Tank State",
+      "description": "Current state of the water tank for a specific user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner's UID" },
+        "waterLevel": { "type": "number" },
+        "motorStatus": { "type": "integer", "enum": [0, 1] },
+        "mode": { "type": "string", "enum": ["MANUAL", "AUTO"] },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "waterLevel", "motorStatus", "mode"]
+    },
+    "HistoryEntry": {
+      "title": "History Entry",
+      "description": "Historical water level reading.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "water_level": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "water_level", "timestamp"]
+    },
+    "Alert": {
+      "title": "Alert",
+      "description": "System alerts for the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "alert_type": { "type": "string" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "isRead": { "type": "boolean" }
+      },
+      "required": ["userId", "alert_type", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents."
+    },
+    "/tanks/{userId}": {
+      "schema": "TankState",
+      "description": "Real-time state of the user's tank."
+    },
+    "/history/{historyId}": {
+      "schema": "HistoryEntry",
+      "description": "Historical data points for all users (filtered by userId)."
+    },
+    "/alerts/{alertId}": {
+      "schema": "Alert",
+      "description": "Alerts for all users (filtered by userId)."
+    }
+  }
+}

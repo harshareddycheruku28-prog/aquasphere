@@ -1,0 +1,5 @@
+{
+  "name": "Smart Water Tank AI Monitor",
+  "description": "IoT-based water tank monitoring system with real-time level tracking, motor control, and AI-powered usage predictions.",
+  "requestFramePermissions": []
+}
