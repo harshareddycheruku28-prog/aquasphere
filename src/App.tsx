@@ -73,10 +73,12 @@ interface AiInsight {
 // ─── Components ───────────────────────────────────────────────────────────────
 
 const Toast = ({ message, type, onClose }: { message: string; type: 'success' | 'error' | 'info'; onClose: () => void }) => {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
-    const t = setTimeout(onClose, 3000);
+    const t = setTimeout(() => onCloseRef.current(), 3000);
     return () => clearTimeout(t);
-  }, [onClose, message]);
+  }, [message]); // re-arm timer when message changes, stable ref avoids dep loop
 
   return (
     <motion.div
@@ -86,8 +88,8 @@ const Toast = ({ message, type, onClose }: { message: string; type: 'success' | 
       className={cn(
         'fixed bottom-28 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-3 rounded-2xl border shadow-xl backdrop-blur-md',
         type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
-        type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' :
-        'bg-cyan-500/10 border-cyan-500/20 text-cyan-400'
+          type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' :
+            'bg-cyan-500/10 border-cyan-500/20 text-cyan-400'
       )}
     >
       {type === 'success' ? <CheckCircle size={18} /> : type === 'error' ? <XCircle size={18} /> : <AlertTriangle size={18} />}
@@ -97,15 +99,19 @@ const Toast = ({ message, type, onClose }: { message: string; type: 'success' | 
 };
 
 const TankVisual = ({ level }: { level: number }) => {
-  const bubbles = useMemo(() =>
-    [...Array(12)].map(() => ({
+  // Stable bubble config — generated once per mount, not per render
+  const bubblesRef = useRef<Array<{ width: number; height: number; left: string; x: number; duration: number; delay: number }> | null>(null);
+  if (!bubblesRef.current) {
+    bubblesRef.current = [...Array(12)].map(() => ({
       width: Math.random() * 6 + 2,
       height: Math.random() * 6 + 2,
       left: `${Math.random() * 100}%`,
       x: (Math.random() - 0.5) * 40,
       duration: Math.random() * 4 + 4,
       delay: Math.random() * 6,
-    })), []);
+    }));
+  }
+  const bubbles = bubblesRef.current;
 
   return (
     <div className="relative w-52 h-72 bg-slate-950/80 rounded-[3rem] border-[6px] border-slate-900 overflow-hidden shadow-[0_0_80px_-20px_rgba(6,182,212,0.4)]">
@@ -274,7 +280,8 @@ export default function App() {
           if (newLevel > 95) newMotor = 0;
         }
         const next: TankState = { ...prev, waterLevel: parseFloat(newLevel.toFixed(1)), motorStatus: newMotor, lastUpdate: new Date().toISOString() };
-        evalAlerts(next.waterLevel);
+        // evalAlerts must be called outside setState to avoid stale closure — schedule via microtask
+        setTimeout(() => evalAlerts(next.waterLevel), 0);
         return next;
       });
     }, 2000);
@@ -292,12 +299,15 @@ export default function App() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     let ws: WebSocket | null = null;
     let reconnect: any = null;
+    let mounted = true;
 
     const connect = () => {
+      if (!mounted) return;
       ws = new WebSocket(`${protocol}//${window.location.host}`);
       wsRef.current = ws;
-      ws.onopen = () => { setWsConnected(true); console.log('WS connected'); };
+      ws.onopen = () => { if (mounted) { setWsConnected(true); console.log('WS connected'); } };
       ws.onmessage = (e) => {
+        if (!mounted) return;
         try {
           const data = JSON.parse(e.data);
           if (data.type === 'BLYNK_STATE') {
@@ -318,12 +328,12 @@ export default function App() {
           }
         } catch { /* ignore */ }
       };
-      ws.onclose = () => { wsRef.current = null; setWsConnected(false); reconnect = setTimeout(connect, 3000); };
+      ws.onclose = () => { wsRef.current = null; if (mounted) { setWsConnected(false); reconnect = setTimeout(connect, 3000); } };
       ws.onerror = () => ws?.close();
     };
 
     connect();
-    return () => { ws?.close(); wsRef.current = null; if (reconnect) clearTimeout(reconnect); };
+    return () => { mounted = false; ws?.close(); wsRef.current = null; if (reconnect) clearTimeout(reconnect); };
   }, [isSimulating]);
 
   // ── Request fresh AI insight on demand ─────────────────────────────────────
@@ -403,7 +413,7 @@ export default function App() {
   // ── Analytics ───────────────────────────────────────────────────────────────
   const dailyAvg = history.length > 0 ? Math.round(history.reduce((a, c) => a + c.water_level, 0) / history.length) : 0;
   const peakTime = history.length > 0
-    ? format(new Date([...history].sort((a, b) => a.water_level - b.water_level)[0].timestamp), 'HH:mm')
+    ? format(new Date([...history].sort((a, b) => b.water_level - a.water_level)[0].timestamp), 'HH:mm')
     : '--:--';
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -488,8 +498,8 @@ export default function App() {
                           className={cn(
                             'w-full flex flex-col items-center justify-center p-8 rounded-[2rem] border transition-all duration-500',
                             state.mode === 'AUTO' ? 'bg-slate-900/50 border-white/5 text-slate-600 cursor-not-allowed' :
-                            state.motorStatus === 1 ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20' :
-                            'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                              state.motorStatus === 1 ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20' :
+                                'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
                           )}
                         >
                           <div className={cn('p-4 rounded-2xl mb-3', state.motorStatus === 1 ? 'bg-red-500/20' : 'bg-emerald-500/20')}>
@@ -561,7 +571,7 @@ export default function App() {
                 <Card title="Recent Usage Trend" icon={TrendingUp}>
                   <div className="h-64 w-full mt-4">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={[...history].reverse().slice(0, 20)}>
+                      <AreaChart data={[...history].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).slice(-20)}>
                         <defs>
                           <linearGradient id="colorLevel" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
@@ -587,7 +597,7 @@ export default function App() {
               <Card title="Historical Water Level (%)">
                 <div className="h-80 w-full mt-4">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={[...history].reverse().slice(0, 50)}>
+                    <LineChart data={[...history].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()).slice(-50)}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
                       <XAxis dataKey="timestamp" tickFormatter={t => format(new Date(t), 'HH:mm')} stroke="#64748b" fontSize={10} />
                       <YAxis stroke="#64748b" fontSize={10} />
@@ -630,8 +640,8 @@ export default function App() {
                       {aiInsight && (
                         <div className={cn('absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-[#020617]',
                           aiInsight.status === 'critical' ? 'bg-rose-500 animate-pulse' :
-                          aiInsight.status === 'warning'  ? 'bg-amber-500 animate-pulse' :
-                          'bg-emerald-500'
+                            aiInsight.status === 'warning' ? 'bg-amber-500 animate-pulse' :
+                              'bg-emerald-500'
                         )} />
                       )}
                     </div>
@@ -642,7 +652,7 @@ export default function App() {
                   </div>
                   <button
                     onClick={requestAiRefresh}
-                    disabled={aiRefreshing || isSimulating}
+                    disabled={aiRefreshing}
                     className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 rounded-2xl text-cyan-400 text-[10px] font-black uppercase tracking-widest hover:bg-cyan-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <RefreshCw size={14} className={aiRefreshing ? 'animate-spin' : ''} />
@@ -662,13 +672,13 @@ export default function App() {
                       {aiInsight.source === 'gemini' ? 'Gemini 2.0 Flash' : 'Fallback Analysis'}
                     </div>
                     <div className={cn('flex items-center gap-1.5 px-3 py-1 rounded-full border text-[9px] font-black uppercase tracking-widest',
-                      aiInsight.confidence === 'high'   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
-                      aiInsight.confidence === 'medium' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
-                      'bg-slate-700/30 border-slate-600/30 text-slate-400'
+                      aiInsight.confidence === 'high' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+                        aiInsight.confidence === 'medium' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
+                          'bg-slate-700/30 border-slate-600/30 text-slate-400'
                     )}>
                       Confidence: {aiInsight.confidence}
                     </div>
-                    <span className="text-[9px] text-slate-600 font-bold ml-auto">Updated {format(new Date(aiInsight.generatedAt), 'HH:mm:ss')}</span>
+                    <span className="text-[9px] text-slate-600 font-bold ml-auto">Updated {(() => { try { return format(new Date(aiInsight.generatedAt), 'HH:mm:ss'); } catch { return '—'; } })()}</span>
                   </div>
                 )}
 
@@ -676,24 +686,24 @@ export default function App() {
                 {aiInsight ? (
                   <div className={cn('p-6 rounded-[2rem] border mb-6',
                     aiInsight.status === 'critical' ? 'bg-rose-500/5 border-rose-500/20' :
-                    aiInsight.status === 'warning'  ? 'bg-amber-500/5 border-amber-500/20' :
-                    'bg-emerald-500/5 border-emerald-500/20'
+                      aiInsight.status === 'warning' ? 'bg-amber-500/5 border-amber-500/20' :
+                        'bg-emerald-500/5 border-emerald-500/20'
                   )}>
                     <div className="flex items-start gap-4">
                       <div className={cn('p-3 rounded-2xl mt-1',
                         aiInsight.status === 'critical' ? 'bg-rose-500/20' :
-                        aiInsight.status === 'warning'  ? 'bg-amber-500/20' :
-                        'bg-emerald-500/20'
+                          aiInsight.status === 'warning' ? 'bg-amber-500/20' :
+                            'bg-emerald-500/20'
                       )}>
                         {aiInsight.status === 'critical' ? <XCircle className="text-rose-400" size={22} /> :
-                         aiInsight.status === 'warning'  ? <AlertTriangle className="text-amber-400" size={22} /> :
-                         <CheckCircle className="text-emerald-400" size={22} />}
+                          aiInsight.status === 'warning' ? <AlertTriangle className="text-amber-400" size={22} /> :
+                            <CheckCircle className="text-emerald-400" size={22} />}
                       </div>
                       <div className="flex-1">
                         <div className={cn('text-[10px] font-black uppercase tracking-[0.2em] mb-1',
                           aiInsight.status === 'critical' ? 'text-rose-400' :
-                          aiInsight.status === 'warning'  ? 'text-amber-400' :
-                          'text-emerald-400'
+                            aiInsight.status === 'warning' ? 'text-amber-400' :
+                              'text-emerald-400'
                         )}>{aiInsight.statusLabel}</div>
                         <p className="text-white font-bold text-sm leading-relaxed">{aiInsight.headline}</p>
                       </div>
@@ -837,7 +847,7 @@ export default function App() {
                       <div>
                         <h4 className="font-bold text-slate-200">{alert.alert_type}</h4>
                         <p className="text-sm text-slate-400 mt-1">{alert.description}</p>
-                        <p className="text-[10px] text-slate-600 mt-2 uppercase font-bold">{format(new Date(alert.timestamp), 'MMM d, HH:mm')}</p>
+                        <p className="text-[10px] text-slate-600 mt-2 uppercase font-bold">{(() => { try { return format(new Date(alert.timestamp), 'MMM d, HH:mm'); } catch { return 'Unknown time'; } })()}</p>
                       </div>
                     </div>
                   </Card>

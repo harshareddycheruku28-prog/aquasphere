@@ -1,24 +1,43 @@
-import tailwindcss from '@tailwindcss/vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
-import {defineConfig, loadEnv} from 'vite';
+import tailwindcss from '@tailwindcss/vite';
 
-export default defineConfig(({mode}) => {
-  const env = loadEnv(mode, '.', '');
-  return {
-    plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, '.'),
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  build: {
+    // Raise the warning threshold and add manual chunk splitting
+    // to break the 777KB monolithic bundle into cacheable pieces
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Core React runtime — almost never changes, cache forever
+          'vendor-react': ['react', 'react-dom'],
+          // Animation library — large, keep separate
+          'vendor-motion': ['motion'],
+          // Charts — recharts + d3 internals are huge
+          'vendor-recharts': ['recharts'],
+          // Gemini AI SDK
+          'vendor-genai': ['@google/genai'],
+          // Date utilities
+          'vendor-datefns': ['date-fns'],
+          // Icon set
+          'vendor-icons': ['lucide-react'],
+        },
       },
     },
-    server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+  },
+  server: {
+    // Proxy WebSocket and API calls to the Express server in dev
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'ws://localhost:3001',
+        ws: true,
+      },
     },
-  };
+  },
 });
