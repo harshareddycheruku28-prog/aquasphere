@@ -57,6 +57,19 @@ interface AlertEntry {
   timestamp: string;
 }
 
+interface AiInsight {
+  status: 'normal' | 'warning' | 'critical';
+  statusLabel: string;
+  headline: string;
+  recommendation: string;
+  predictedEmptyTime: string | null;
+  drainRatePerMin: number;
+  confidence: 'high' | 'medium' | 'low';
+  tips: string[];
+  generatedAt: string;
+  source: 'gemini' | 'fallback';
+}
+
 // ─── Components ───────────────────────────────────────────────────────────────
 
 const Toast = ({ message, type, onClose }: { message: string; type: 'success' | 'error' | 'info'; onClose: () => void }) => {
@@ -185,6 +198,8 @@ export default function App() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [alerts, setAlerts] = useState<AlertEntry[]>([]);
   const [prediction, setPrediction] = useState<any>(null);
+  const [aiInsight, setAiInsight] = useState<AiInsight | null>(null);
+  const [aiRefreshing, setAiRefreshing] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -200,6 +215,7 @@ export default function App() {
   const lastAlerts = useRef({ empty: 0, full: 0 });
   const simRef = useRef(state);
   simRef.current = state;
+  const wsRef = useRef<WebSocket | null>(null);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => setToast({ message, type });
 
@@ -270,7 +286,7 @@ export default function App() {
     return () => { clearInterval(interval); clearInterval(histInterval); };
   }, [isSimulating]);
 
-  // ── WebSocket (real Blynk data) ─────────────────────────────────────────────
+  // ── WebSocket (real Blynk data + AI insights) ──────────────────────────────
   useEffect(() => {
     if (isSimulating) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -279,6 +295,7 @@ export default function App() {
 
     const connect = () => {
       ws = new WebSocket(`${protocol}//${window.location.host}`);
+      wsRef.current = ws;
       ws.onopen = () => { setWsConnected(true); console.log('WS connected'); };
       ws.onmessage = (e) => {
         try {
@@ -295,15 +312,34 @@ export default function App() {
             addHistory(p.waterLevel);
             evalAlerts(p.waterLevel);
           }
+          if (data.type === 'AI_INSIGHT') {
+            setAiInsight(data.payload);
+            setAiRefreshing(false);
+          }
         } catch { /* ignore */ }
       };
-      ws.onclose = () => { setWsConnected(false); reconnect = setTimeout(connect, 3000); };
+      ws.onclose = () => { wsRef.current = null; setWsConnected(false); reconnect = setTimeout(connect, 3000); };
       ws.onerror = () => ws?.close();
     };
 
     connect();
-    return () => { ws?.close(); if (reconnect) clearTimeout(reconnect); };
+    return () => { ws?.close(); wsRef.current = null; if (reconnect) clearTimeout(reconnect); };
   }, [isSimulating]);
+
+  // ── Request fresh AI insight on demand ─────────────────────────────────────
+  const requestAiRefresh = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      setAiRefreshing(true);
+      wsRef.current.send(JSON.stringify({ type: 'REQUEST_AI' }));
+    } else {
+      // Fallback: REST call
+      setAiRefreshing(true);
+      fetch('/api/ai/analyze', { method: 'POST' })
+        .then(r => r.json())
+        .then(insight => { setAiInsight(insight); setAiRefreshing(false); })
+        .catch(() => setAiRefreshing(false));
+    }
+  }, []);
 
   // ── Motor & Mode controls ───────────────────────────────────────────────────
   const toggleMotor = async () => {
@@ -581,56 +617,207 @@ export default function App() {
           {/* ── AI ── */}
           {activeTab === 'ai' && (
             <motion.div key="ai" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
+
+              {/* ── Header card ── */}
               <Card className="bg-gradient-to-br from-indigo-600/10 to-cyan-600/10 border-cyan-500/20 relative overflow-hidden">
                 <div className="absolute -top-24 -right-24 w-64 h-64 bg-cyan-500/10 blur-[80px] rounded-full" />
-                <div className="flex items-center gap-5 mb-8">
-                  <div className="p-4 bg-gradient-to-br from-cyan-500 to-indigo-600 rounded-[1.5rem] shadow-xl shadow-cyan-500/20"><Brain className="text-white" size={28} /></div>
-                  <div>
-                    <h2 className="text-2xl font-black tracking-tight">AI Usage Insights</h2>
-                    <p className="text-[10px] text-cyan-400 font-black uppercase tracking-[0.2em]">Predictive Intelligence</p>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-5">
+                    <div className="relative">
+                      <div className="p-4 bg-gradient-to-br from-cyan-500 to-indigo-600 rounded-[1.5rem] shadow-xl shadow-cyan-500/20">
+                        <Brain className="text-white" size={28} />
+                      </div>
+                      {aiInsight && (
+                        <div className={cn('absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-[#020617]',
+                          aiInsight.status === 'critical' ? 'bg-rose-500 animate-pulse' :
+                          aiInsight.status === 'warning'  ? 'bg-amber-500 animate-pulse' :
+                          'bg-emerald-500'
+                        )} />
+                      )}
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-black tracking-tight">Gemini AI Insights</h2>
+                      <p className="text-[10px] text-cyan-400 font-black uppercase tracking-[0.2em]">Real-time Predictive Intelligence</p>
+                    </div>
                   </div>
+                  <button
+                    onClick={requestAiRefresh}
+                    disabled={aiRefreshing || isSimulating}
+                    className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 rounded-2xl text-cyan-400 text-[10px] font-black uppercase tracking-widest hover:bg-cyan-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <RefreshCw size={14} className={aiRefreshing ? 'animate-spin' : ''} />
+                    {aiRefreshing ? 'Analyzing…' : 'Refresh AI'}
+                  </button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="p-8 bg-black/20 rounded-[2rem] border border-white/5">
+
+                {/* Source badge + last updated */}
+                {aiInsight && (
+                  <div className="flex items-center gap-3 mt-4 mb-6">
+                    <div className={cn('flex items-center gap-1.5 px-3 py-1 rounded-full border text-[9px] font-black uppercase tracking-widest',
+                      aiInsight.source === 'gemini'
+                        ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400'
+                        : 'bg-slate-700/30 border-slate-600/30 text-slate-400'
+                    )}>
+                      <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                      {aiInsight.source === 'gemini' ? 'Gemini 2.0 Flash' : 'Fallback Analysis'}
+                    </div>
+                    <div className={cn('flex items-center gap-1.5 px-3 py-1 rounded-full border text-[9px] font-black uppercase tracking-widest',
+                      aiInsight.confidence === 'high'   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+                      aiInsight.confidence === 'medium' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
+                      'bg-slate-700/30 border-slate-600/30 text-slate-400'
+                    )}>
+                      Confidence: {aiInsight.confidence}
+                    </div>
+                    <span className="text-[9px] text-slate-600 font-bold ml-auto">Updated {format(new Date(aiInsight.generatedAt), 'HH:mm:ss')}</span>
+                  </div>
+                )}
+
+                {/* Status + Headline */}
+                {aiInsight ? (
+                  <div className={cn('p-6 rounded-[2rem] border mb-6',
+                    aiInsight.status === 'critical' ? 'bg-rose-500/5 border-rose-500/20' :
+                    aiInsight.status === 'warning'  ? 'bg-amber-500/5 border-amber-500/20' :
+                    'bg-emerald-500/5 border-emerald-500/20'
+                  )}>
+                    <div className="flex items-start gap-4">
+                      <div className={cn('p-3 rounded-2xl mt-1',
+                        aiInsight.status === 'critical' ? 'bg-rose-500/20' :
+                        aiInsight.status === 'warning'  ? 'bg-amber-500/20' :
+                        'bg-emerald-500/20'
+                      )}>
+                        {aiInsight.status === 'critical' ? <XCircle className="text-rose-400" size={22} /> :
+                         aiInsight.status === 'warning'  ? <AlertTriangle className="text-amber-400" size={22} /> :
+                         <CheckCircle className="text-emerald-400" size={22} />}
+                      </div>
+                      <div className="flex-1">
+                        <div className={cn('text-[10px] font-black uppercase tracking-[0.2em] mb-1',
+                          aiInsight.status === 'critical' ? 'text-rose-400' :
+                          aiInsight.status === 'warning'  ? 'text-amber-400' :
+                          'text-emerald-400'
+                        )}>{aiInsight.statusLabel}</div>
+                        <p className="text-white font-bold text-sm leading-relaxed">{aiInsight.headline}</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-6 bg-black/20 rounded-[2rem] border border-white/5 mb-6 flex items-center justify-center">
+                    <div className="flex items-center gap-3 text-slate-500">
+                      <RefreshCw size={18} className="animate-spin" />
+                      <span className="text-sm font-bold">Waiting for first AI analysis…</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Metrics row */}
+                <div className="grid grid-cols-2 gap-4 mb-6">
+                  <div className="p-6 bg-black/20 rounded-[2rem] border border-white/5">
                     <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] mb-3">Estimated Empty Time</p>
-                    {prediction?.predictedEmptyTime ? (
+                    {aiInsight?.predictedEmptyTime ? (
                       <div className="flex items-baseline gap-2">
-                        <span className="text-4xl font-black text-white tracking-tighter text-glow-cyan">{format(new Date(prediction.predictedEmptyTime), 'HH:mm')}</span>
+                        <span className="text-4xl font-black text-white tracking-tighter text-glow-cyan">
+                          {format(new Date(aiInsight.predictedEmptyTime), 'HH:mm')}
+                        </span>
                         <span className="text-xs font-bold text-slate-600 uppercase tracking-widest">Today</span>
                       </div>
                     ) : (
-                      <span className="text-lg font-bold text-slate-600 animate-pulse">Analyzing patterns…</span>
+                      <span className="text-lg font-bold text-slate-500">
+                        {aiInsight ? (state.motorStatus === 1 ? 'Filling ↑' : 'Stable') : '——'}
+                      </span>
                     )}
-                    <div className="mt-6 flex items-center gap-2 text-amber-400/80 bg-amber-400/5 w-fit px-3 py-1.5 rounded-full border border-amber-400/10">
+                    <div className="mt-4 flex items-center gap-2 text-amber-400/80 bg-amber-400/5 w-fit px-3 py-1.5 rounded-full border border-amber-400/10">
                       <TrendingDown size={12} />
-                      <span className="text-[10px] font-black uppercase tracking-widest">Usage: {prediction?.usageRate || '—'}</span>
+                      <span className="text-[10px] font-black uppercase tracking-widest">
+                        {aiInsight ? `${aiInsight.drainRatePerMin}% / min` : '—'}
+                      </span>
                     </div>
                   </div>
-                  <div className="p-8 bg-black/20 rounded-[2rem] border border-white/5">
-                    <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] mb-3">Drain Rate (slope)</p>
+                  <div className="p-6 bg-black/20 rounded-[2rem] border border-white/5">
+                    <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] mb-3">Drain Rate</p>
                     <div className="flex items-baseline gap-2">
-                      <span className="text-4xl font-black text-cyan-400 tracking-tighter text-glow-cyan">{prediction ? (prediction.slope > 0 ? '+' : '') + prediction.slope.toFixed(3) : '—'}</span>
+                      <span className="text-4xl font-black text-cyan-400 tracking-tighter text-glow-cyan">
+                        {aiInsight ? `${aiInsight.drainRatePerMin > 0 ? '-' : '+'}${aiInsight.drainRatePerMin}` : '—'}
+                      </span>
                       <span className="text-xs font-bold text-slate-600 uppercase tracking-widest">%/min</span>
                     </div>
-                    <div className="mt-6 flex items-center gap-2 text-emerald-400/80 bg-emerald-400/5 w-fit px-3 py-1.5 rounded-full border border-emerald-400/10">
+                    <div className="mt-4 flex items-center gap-2 text-emerald-400/80 bg-emerald-400/5 w-fit px-3 py-1.5 rounded-full border border-emerald-400/10">
                       <TrendingUp size={12} />
-                      <span className="text-[10px] font-black uppercase tracking-widest">{prediction?.slope < 0 ? 'Draining' : prediction?.slope > 0 ? 'Filling' : 'Stable'}</span>
+                      <span className="text-[10px] font-black uppercase tracking-widest">
+                        {aiInsight ? (aiInsight.drainRatePerMin > 0 ? 'Draining' : 'Filling / Stable') : '—'}
+                      </span>
                     </div>
                   </div>
                 </div>
-                <div className="mt-8 p-8 bg-white/[0.02] rounded-[2rem] border border-white/5">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
-                    <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Pattern Analysis</h4>
+
+                {/* Recommendation */}
+                {aiInsight?.recommendation && (
+                  <div className="p-6 bg-indigo-500/5 rounded-[2rem] border border-indigo-500/20 mb-6">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-400">AI Recommendation</h4>
+                    </div>
+                    <p className="text-sm text-slate-300 leading-relaxed font-medium">{aiInsight.recommendation}</p>
                   </div>
-                  <p className="text-sm text-slate-400 leading-relaxed font-medium">
-                    {history.length < 5
-                      ? 'Collecting data… Enable Simulation Mode or connect your Blynk hardware to start analysis.'
-                      : `Based on ${history.length} readings, the tank is currently ${prediction?.slope < -0.01 ? 'draining' : prediction?.slope > 0.01 ? 'filling' : 'stable'}. 
-                         The AI suggests enabling AUTO MODE to maintain optimal levels.`}
-                  </p>
-                </div>
+                )}
+
+                {/* Tips */}
+                {aiInsight?.tips && aiInsight.tips.length > 0 && (
+                  <div className="p-6 bg-white/[0.02] rounded-[2rem] border border-white/5">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
+                      <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Smart Tips</h4>
+                    </div>
+                    <div className="space-y-3">
+                      {aiInsight.tips.map((tip, i) => (
+                        <motion.div
+                          key={i}
+                          initial={{ opacity: 0, x: -10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: i * 0.1 }}
+                          className="flex items-start gap-3 p-3 bg-cyan-500/5 rounded-2xl border border-cyan-500/10"
+                        >
+                          <div className="w-5 h-5 rounded-full bg-cyan-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                            <span className="text-[9px] font-black text-cyan-400">{i + 1}</span>
+                          </div>
+                          <p className="text-xs text-slate-300 font-medium leading-relaxed">{tip}</p>
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Simulation warning */}
+                {isSimulating && (
+                  <div className="mt-4 p-4 bg-amber-500/5 border border-amber-500/20 rounded-2xl">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle size={14} className="text-amber-400" />
+                      <p className="text-[10px] text-amber-400 font-bold uppercase tracking-widest">
+                        Simulation mode — AI uses simulated data. Disable for real hardware insights.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </Card>
+
+              {/* Math prediction card (kept as supplemental) */}
+              {prediction && (
+                <Card title="Statistical Trend Analysis" icon={TrendingDown}>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-4 bg-white/[0.02] rounded-2xl border border-white/5">
+                      <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-2">Slope (linear)</p>
+                      <span className="text-2xl font-black text-cyan-400">
+                        {(prediction.slope > 0 ? '+' : '') + prediction.slope.toFixed(3)}
+                      </span>
+                      <span className="text-xs text-slate-600 ml-1">%/min</span>
+                    </div>
+                    <div className="p-4 bg-white/[0.02] rounded-2xl border border-white/5">
+                      <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest mb-2">Data Points</p>
+                      <span className="text-2xl font-black text-white">{history.length}</span>
+                      <span className="text-xs text-slate-600 ml-1">readings</span>
+                    </div>
+                  </div>
+                </Card>
+              )}
+
             </motion.div>
           )}
 
@@ -643,16 +830,18 @@ export default function App() {
                   <p>No active alerts</p>
                 </div>
               ) : alerts.map(alert => (
-                <Card key={alert.id} className="border-l-4 border-l-amber-500">
-                  <div className="flex items-start gap-4">
-                    <div className="p-2 bg-amber-500/10 rounded-lg"><AlertTriangle className="text-amber-500" size={20} /></div>
-                    <div>
-                      <h4 className="font-bold text-slate-200">{alert.alert_type}</h4>
-                      <p className="text-sm text-slate-400 mt-1">{alert.description}</p>
-                      <p className="text-[10px] text-slate-600 mt-2 uppercase font-bold">{format(new Date(alert.timestamp), 'MMM d, HH:mm')}</p>
+                <div key={alert.id}>
+                  <Card className="border-l-4 border-l-amber-500">
+                    <div className="flex items-start gap-4">
+                      <div className="p-2 bg-amber-500/10 rounded-lg"><AlertTriangle className="text-amber-500" size={20} /></div>
+                      <div>
+                        <h4 className="font-bold text-slate-200">{alert.alert_type}</h4>
+                        <p className="text-sm text-slate-400 mt-1">{alert.description}</p>
+                        <p className="text-[10px] text-slate-600 mt-2 uppercase font-bold">{format(new Date(alert.timestamp), 'MMM d, HH:mm')}</p>
+                      </div>
                     </div>
-                  </div>
-                </Card>
+                  </Card>
+                </div>
               ))}
             </motion.div>
           )}
