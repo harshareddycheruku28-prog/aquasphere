@@ -184,14 +184,14 @@ const Card = ({ children, className, title, icon: Icon }: { children: React.Reac
 const NavItem = ({ active, icon: Icon, label, onClick }: { active: boolean; icon: any; label: string; onClick: () => void }) => (
   <button
     onClick={onClick}
-    className={cn('relative flex flex-col items-center justify-center gap-2 px-5 py-2 transition-all duration-700', active ? 'text-cyan-400' : 'text-slate-500 hover:text-slate-300')}
+    className={cn('relative flex flex-col items-center justify-center gap-1 sm:gap-2 px-1 sm:px-5 py-2 transition-all duration-700', active ? 'text-cyan-400' : 'text-slate-500 hover:text-slate-300')}
   >
-    <div className={cn('p-2.5 rounded-2xl transition-all duration-700 relative overflow-hidden', active ? 'bg-cyan-500/15 shadow-[0_0_30px_rgba(6,182,212,0.3)]' : 'bg-transparent')}>
-      <Icon size={24} strokeWidth={active ? 2.5 : 2} className="relative z-10" />
+    <div className={cn('p-2 sm:p-2.5 rounded-2xl transition-all duration-700 relative overflow-hidden', active ? 'bg-cyan-500/15 shadow-[0_0_30px_rgba(6,182,212,0.3)]' : 'bg-transparent')}>
+      <Icon className="w-5 h-5 sm:w-6 sm:h-6" strokeWidth={active ? 2.5 : 2} />
       {active && <motion.div layoutId="nav-bg" className="absolute inset-0 bg-gradient-to-br from-cyan-500/20 to-indigo-500/20" />}
     </div>
-    <span className={cn('text-[10px] font-black uppercase tracking-[0.2em] transition-all duration-700', active ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2')}>{label}</span>
-    {active && <motion.div layoutId="nav-glow" className="absolute -bottom-5 w-10 h-1.5 bg-cyan-500 blur-[6px] rounded-full" />}
+    <span className={cn('text-[8px] sm:text-[10px] font-black uppercase tracking-widest sm:tracking-[0.2em] transition-all duration-700 hidden sm:block', active ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2')}>{label}</span>
+    {active && <motion.div layoutId="nav-glow" className="absolute -bottom-4 sm:-bottom-5 w-6 sm:w-10 h-1.5 bg-cyan-500 blur-[6px] rounded-full" />}
   </button>
 );
 
@@ -930,7 +930,7 @@ export default function App() {
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-8 left-1/2 -translate-x-1/2 w-[90%] max-w-lg glass rounded-[2.5rem] px-8 py-4 flex items-center justify-between z-50 border border-white/[0.08] shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
+      <nav className="fixed bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 w-[95%] sm:w-[90%] max-w-lg glass rounded-3xl sm:rounded-[2.5rem] px-2 sm:px-8 py-2 sm:py-4 flex items-center justify-between z-50 border border-white/[0.08] shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
         <NavItem active={activeTab === 'dashboard'} icon={Droplets} label="Home" onClick={() => setActiveTab('dashboard')} />
         <NavItem active={activeTab === 'analytics'} icon={Activity} label="Stats" onClick={() => setActiveTab('analytics')} />
         <NavItem active={activeTab === 'ai'} icon={Brain} label="AI" onClick={() => setActiveTab('ai')} />
